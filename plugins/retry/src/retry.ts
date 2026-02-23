@@ -126,61 +126,56 @@ export function PiniaColadaRetry(
 
       // capture state before the fetch runs so we can revert during retries
       const previousState = queryEntry.state.value
+      onError(() => {
+        if (queryEntry.state.value.status !== 'error') return
+        const error = queryEntry.state.value.error
+        // ensure the entry exists
+        let entry = retryMap.get(key)
+        if (!entry) {
+          entry = { retryCount: 0 }
+          retryMap.set(key, entry)
+        }
 
-      const retryFetch = () => {
-        if (queryEntry.state.value.status === 'error') {
-          const error = queryEntry.state.value.error
-          // ensure the entry exists
-          let entry = retryMap.get(key)
-          if (!entry) {
-            entry = { retryCount: 0 }
-            retryMap.set(key, entry)
-          }
+        const shouldRetry =
+          typeof retry === 'number' ? retry > entry.retryCount : retry(entry.retryCount, error)
 
-          const shouldRetry =
-            typeof retry === 'number' ? retry > entry.retryCount : retry(entry.retryCount, error)
-
-          if (shouldRetry) {
-            queryEntry.ext.isRetrying.value = true
-            queryEntry.ext.retryCount.value = entry.retryCount + 1
-            queryEntry.ext.retryError.value = error
-            // revert to pre-fetch state so the error is only visible via retryError
-            queryEntry.state.value = previousState
-            const delayTime = typeof delay === 'function' ? delay(entry.retryCount) : delay
-            entry.timeoutId = setTimeout(() => {
-              if (!queryEntry.active || toValue(queryEntry.options?.enabled) === false) {
-                retryMap.delete(key)
-                queryEntry.ext.isRetrying.value = false
-                queryEntry.ext.retryCount.value = 0
-                queryEntry.ext.retryError.value = null
-                return
-              }
-              // NOTE: we could add some default error handler
-              isInternalCall = true
-              Promise.resolve(queryCache.fetch(queryEntry)).catch(
-                process.env.NODE_ENV !== 'test' ? console.error : () => {},
-              )
-              isInternalCall = false
-              if (entry) {
-                entry.retryCount++
-              }
-            }, delayTime)
-          } else {
-            // remove the entry if we are not going to retry
-            queryEntry.ext.isRetrying.value = false
-            queryEntry.ext.retryError.value = null
-            retryMap.delete(key)
-          }
+        if (shouldRetry) {
+          queryEntry.ext.isRetrying.value = true
+          queryEntry.ext.retryCount.value = entry.retryCount + 1
+          queryEntry.ext.retryError.value = error
+          // revert to pre-fetch state so the error is only visible via retryError
+          queryEntry.state.value = previousState
+          const delayTime = typeof delay === 'function' ? delay(entry.retryCount) : delay
+          entry.timeoutId = setTimeout(() => {
+            if (!queryEntry.active || toValue(queryEntry.options?.enabled) === false) {
+              retryMap.delete(key)
+              queryEntry.ext.isRetrying.value = false
+              queryEntry.ext.retryCount.value = 0
+              queryEntry.ext.retryError.value = null
+              return
+            }
+            // NOTE: we could add some default error handler
+            isInternalCall = true
+            Promise.resolve(queryCache.fetch(queryEntry)).catch(
+              process.env.NODE_ENV !== 'test' ? console.error : () => {},
+            )
+            isInternalCall = false
+            entry.retryCount++
+          }, delayTime)
         } else {
-          // remove the entry if it worked out to reset it
+          // remove the entry if we are not going to retry
           queryEntry.ext.isRetrying.value = false
-          queryEntry.ext.retryCount.value = 0
           queryEntry.ext.retryError.value = null
           retryMap.delete(key)
         }
-      }
-      onError(retryFetch)
-      after(retryFetch)
+      })
+      after(() => {
+        // remove the entry if it worked out to reset it
+        queryEntry.ext.isRetrying.value = false
+        queryEntry.ext.retryCount.value = 0
+        queryEntry.ext.retryError.value = null
+        retryMap.delete(key)
+      })
     })
   }
 }
